@@ -1,4 +1,4 @@
-module sbomfetch
+module github.com/javacruft/sbomfetch
 
 go 1.21
 
