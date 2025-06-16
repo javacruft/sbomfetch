@@ -1,4 +1,4 @@
-# SBOM Downloader
+# sbomfetch
 
 A Go program that parses SPDX-formatted SBOM (Software Bill of Materials) files to download and extract source code archives referenced in the `downloadLocation` fields.
 
@@ -29,7 +29,7 @@ A Go program that parses SPDX-formatted SBOM (Software Bill of Materials) files 
 ## Usage
 
 ```bash
-go run sbom-downloader.go [options] <sbom-file.json> <download-directory>
+go run sbomfetch.go [options] <sbom-file.json> <download-directory>
 ```
 
 ### Options
@@ -41,13 +41,13 @@ go run sbom-downloader.go [options] <sbom-file.json> <download-directory>
 
 ```bash
 # Basic usage with default 4 concurrent downloads
-go run sbom-downloader.go haproxy-sbom.json ./downloads
+go run sbomfetch.go haproxy-sbom.json ./downloads
 
 # Use 8 concurrent downloads
-go run sbom-downloader.go -concurrency 8 haproxy-sbom.json ./downloads
+go run sbomfetch.go -concurrency 8 haproxy-sbom.json ./downloads
 
 # Show help
-go run sbom-downloader.go -h
+go run sbomfetch.go -h
 ```
 
 ## Output Structure

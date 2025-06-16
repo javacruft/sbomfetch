@@ -1,4 +1,4 @@
-module sbom-downloader
+module sbomfetch
 
 go 1.21
 
