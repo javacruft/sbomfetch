@@ -20,16 +20,15 @@ A Go program that parses SPDX-formatted SBOM (Software Bill of Materials) files 
 
 ## Installation
 
-1. Clone or download the source code
-2. Install dependencies:
-   ```bash
-   go mod tidy
-   ```
+Install using Go:
+```bash
+go install -v github.com/javacruft/sbomfetch@latest
+```
 
 ## Usage
 
 ```bash
-go run sbomfetch.go [options] <sbom-file.json> <download-directory>
+sbomfetch [options] <sbom-file.json> <download-directory>
 ```
 
 ### Options
@@ -41,13 +40,13 @@ go run sbomfetch.go [options] <sbom-file.json> <download-directory>
 
 ```bash
 # Basic usage with default 4 concurrent downloads
-go run sbomfetch.go haproxy-sbom.json ./downloads
+sbomfetch haproxy-sbom.json ./downloads
 
 # Use 8 concurrent downloads
-go run sbomfetch.go -concurrency 8 haproxy-sbom.json ./downloads
+sbomfetch -concurrency 8 haproxy-sbom.json ./downloads
 
 # Show help
-go run sbomfetch.go -h
+sbomfetch -h
 ```
 
 ## Output Structure
