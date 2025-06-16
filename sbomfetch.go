@@ -48,6 +48,17 @@ type DownloadResult struct {
 	Error      error
 }
 
+type DownloadSummary struct {
+	SuccessCount int
+	FailureCount int
+	Files        []string
+}
+
+type ExtractionSummary struct {
+	SuccessCount int
+	FailureCount int
+}
+
 type PackageMapping struct {
 	URL        string
 	APKPackage string
@@ -92,14 +103,23 @@ func main() {
 		return
 	}
 
-	downloadedFiles := downloadConcurrently(packageMappings, archivesDir, *concurrency)
+	downloadSummary := downloadConcurrently(packageMappings, archivesDir, *concurrency)
 
 	fmt.Printf("Download complete. Files saved to: %s\n", downloadDir)
-	fmt.Printf("Extracting %d archives...\n", len(downloadedFiles))
+	fmt.Printf("Extracting %d archives...\n", len(downloadSummary.Files))
 
-	extractArchives(downloadedFiles, downloadDir)
+	extractionSummary := extractArchives(downloadSummary.Files, downloadDir)
 
 	fmt.Printf("Extraction complete. Archives extracted to: %s\n", downloadDir)
+	
+	// Print execution summary
+	fmt.Println("\n=== EXECUTION SUMMARY ===")
+	fmt.Printf("Downloads: %d successful, %d failed (total: %d)\n", 
+		downloadSummary.SuccessCount, downloadSummary.FailureCount, 
+		downloadSummary.SuccessCount+downloadSummary.FailureCount)
+	fmt.Printf("Extractions: %d successful, %d failed (total: %d)\n", 
+		extractionSummary.SuccessCount, extractionSummary.FailureCount,
+		extractionSummary.SuccessCount+extractionSummary.FailureCount)
 }
 
 func extractPackageMappings(sbomFile string) ([]PackageMapping, error) {
@@ -153,7 +173,7 @@ func extractPackageMappings(sbomFile string) ([]PackageMapping, error) {
 	return mappings, nil
 }
 
-func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurrency int) []string {
+func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurrency int) DownloadSummary {
 	jobs := make(chan DownloadJob, len(mappings))
 	results := make(chan DownloadResult, len(mappings))
 
@@ -186,18 +206,27 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 	// Collect results
 	completed := 0
 	var downloadedFiles []string
+	successCount := 0
+	failureCount := 0
+	
 	for result := range results {
 		completed++
 		if result.Error != nil {
+			failureCount++
 			fmt.Fprintf(os.Stderr, "Error downloading %s: %v\n", result.URL, result.Error)
 		} else {
+			successCount++
 			filename := getFilenameFromURL(result.URL)
 			downloadedFiles = append(downloadedFiles, filepath.Join(archivesDir, filename))
 			fmt.Printf("✓ Downloaded (%d/%d): %s [%s]\n", completed, len(mappings), filename, result.APKPackage)
 		}
 	}
 	
-	return downloadedFiles
+	return DownloadSummary{
+		SuccessCount: successCount,
+		FailureCount: failureCount,
+		Files:        downloadedFiles,
+	}
 }
 
 func worker(jobs <-chan DownloadJob, results chan<- DownloadResult, archivesDir string, wg *sync.WaitGroup) {
@@ -270,14 +299,24 @@ func getFilenameFromURL(url string) string {
 	return filename
 }
 
-func extractArchives(archiveFiles []string, extractDir string) {
+func extractArchives(archiveFiles []string, extractDir string) ExtractionSummary {
+	successCount := 0
+	failureCount := 0
+	
 	for i, archiveFile := range archiveFiles {
 		fmt.Printf("Extracting (%d/%d): %s\n", i+1, len(archiveFiles), filepath.Base(archiveFile))
 		if err := extractArchive(archiveFile, extractDir); err != nil {
+			failureCount++
 			fmt.Fprintf(os.Stderr, "Error extracting %s: %v\n", archiveFile, err)
 		} else {
+			successCount++
 			fmt.Printf("✓ Extracted: %s\n", filepath.Base(archiveFile))
 		}
+	}
+	
+	return ExtractionSummary{
+		SuccessCount: successCount,
+		FailureCount: failureCount,
 	}
 }
 
