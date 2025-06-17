@@ -111,13 +111,13 @@ func main() {
 	extractionSummary := extractArchives(downloadSummary.Files, downloadDir)
 
 	fmt.Printf("Extraction complete. Archives extracted to: %s\n", downloadDir)
-	
+
 	// Print execution summary
 	fmt.Println("\n=== EXECUTION SUMMARY ===")
-	fmt.Printf("Downloads: %d successful, %d failed (total: %d)\n", 
-		downloadSummary.SuccessCount, downloadSummary.FailureCount, 
+	fmt.Printf("Downloads: %d successful, %d failed (total: %d)\n",
+		downloadSummary.SuccessCount, downloadSummary.FailureCount,
 		downloadSummary.SuccessCount+downloadSummary.FailureCount)
-	fmt.Printf("Extractions: %d successful, %d failed (total: %d)\n", 
+	fmt.Printf("Extractions: %d successful, %d failed (total: %d)\n",
 		extractionSummary.SuccessCount, extractionSummary.FailureCount,
 		extractionSummary.SuccessCount+extractionSummary.FailureCount)
 }
@@ -153,10 +153,10 @@ func extractPackageMappings(sbomFile string) ([]PackageMapping, error) {
 
 	var mappings []PackageMapping
 	for _, pkg := range sbom.Packages {
-		if pkg.DownloadLocation != "" && 
-		   pkg.DownloadLocation != "NOASSERTION" && 
-		   strings.HasPrefix(pkg.DownloadLocation, "http") {
-			
+		if pkg.DownloadLocation != "" &&
+			pkg.DownloadLocation != "NOASSERTION" &&
+			strings.HasPrefix(pkg.DownloadLocation, "http") {
+
 			if isTarball(pkg.DownloadLocation) {
 				apkPackage := sourceToAPK[pkg.SPDXID]
 				if apkPackage == "" {
@@ -208,7 +208,7 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 	var downloadedFiles []string
 	successCount := 0
 	failureCount := 0
-	
+
 	for result := range results {
 		completed++
 		if result.Error != nil {
@@ -221,7 +221,7 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 			fmt.Printf("✓ Downloaded (%d/%d): %s [%s]\n", completed, len(mappings), filename, result.APKPackage)
 		}
 	}
-	
+
 	return DownloadSummary{
 		SuccessCount: successCount,
 		FailureCount: failureCount,
@@ -233,7 +233,7 @@ func worker(jobs <-chan DownloadJob, results chan<- DownloadResult, archivesDir 
 	defer wg.Done()
 	for job := range jobs {
 		fmt.Printf("→ Starting download (%d/%d): %s [%s]\n", job.Index, job.Total, getFilenameFromURL(job.URL), job.APKPackage)
-		
+
 		err := downloadFileToDir(job.URL, archivesDir)
 		results <- DownloadResult{
 			URL:        job.URL,
@@ -245,10 +245,10 @@ func worker(jobs <-chan DownloadJob, results chan<- DownloadResult, archivesDir 
 
 func isTarball(url string) bool {
 	lowerURL := strings.ToLower(url)
-	return strings.Contains(lowerURL, ".tar.gz") || 
-		   strings.Contains(lowerURL, ".tar.xz") || 
-		   strings.Contains(lowerURL, ".tgz") ||
-		   strings.Contains(lowerURL, ".tar.bz2")
+	return strings.Contains(lowerURL, ".tar.gz") ||
+		strings.Contains(lowerURL, ".tar.xz") ||
+		strings.Contains(lowerURL, ".tgz") ||
+		strings.Contains(lowerURL, ".tar.bz2")
 }
 
 func downloadFileToDir(url, downloadDir string) error {
@@ -281,7 +281,7 @@ func downloadFileToDir(url, downloadDir string) error {
 
 func getFilenameFromURL(url string) string {
 	filename := path.Base(url)
-	
+
 	if filename == "." || filename == "/" {
 		parts := strings.Split(url, "/")
 		for i := len(parts) - 1; i >= 0; i-- {
@@ -291,18 +291,18 @@ func getFilenameFromURL(url string) string {
 			}
 		}
 	}
-	
+
 	if !isTarball(filename) {
 		filename = filename + ".tar.gz"
 	}
-	
+
 	return filename
 }
 
 func extractArchives(archiveFiles []string, extractDir string) ExtractionSummary {
 	successCount := 0
 	failureCount := 0
-	
+
 	for i, archiveFile := range archiveFiles {
 		fmt.Printf("Extracting (%d/%d): %s\n", i+1, len(archiveFiles), filepath.Base(archiveFile))
 		if err := extractArchive(archiveFile, extractDir); err != nil {
@@ -313,7 +313,7 @@ func extractArchives(archiveFiles []string, extractDir string) ExtractionSummary
 			fmt.Printf("✓ Extracted: %s\n", filepath.Base(archiveFile))
 		}
 	}
-	
+
 	return ExtractionSummary{
 		SuccessCount: successCount,
 		FailureCount: failureCount,
@@ -352,7 +352,7 @@ func extractArchive(archiveFile, extractDir string) error {
 
 	// Extract tar archive
 	tarReader := tar.NewReader(reader)
-	
+
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -364,7 +364,7 @@ func extractArchive(archiveFile, extractDir string) error {
 
 		// Create the full path for extraction
 		targetPath := filepath.Join(extractDir, header.Name)
-		
+
 		// Security check: prevent path traversal
 		if !strings.HasPrefix(targetPath, filepath.Clean(extractDir)+string(os.PathSeparator)) {
 			fmt.Fprintf(os.Stderr, "Warning: skipping potentially dangerous path: %s\n", header.Name)
@@ -382,12 +382,12 @@ func extractArchive(archiveFile, extractDir string) error {
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 				return fmt.Errorf("failed to create parent directory: %w", err)
 			}
-			
+
 			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
 			if err != nil {
 				return fmt.Errorf("failed to create file %s: %w", targetPath, err)
 			}
-			
+
 			if _, err := io.Copy(outFile, tarReader); err != nil {
 				outFile.Close()
 				return fmt.Errorf("failed to extract file %s: %w", targetPath, err)
@@ -398,9 +398,10 @@ func extractArchive(archiveFile, extractDir string) error {
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 				return fmt.Errorf("failed to create parent directory: %w", err)
 			}
-			
+
 			if err := os.Symlink(header.Linkname, targetPath); err != nil {
-				return fmt.Errorf("failed to create symlink %s: %w", targetPath, err)
+				fmt.Fprintf(os.Stderr, "failed to create symlink %s: %w\n", targetPath, err)
+				continue
 			}
 		}
 	}
