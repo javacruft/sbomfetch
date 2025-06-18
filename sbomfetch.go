@@ -7,6 +7,7 @@ import (
 	"archive/tar"
 	"compress/bzip2"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,6 +19,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/sigstore/cosign/v2/pkg/oci"
+	"github.com/sigstore/cosign/v2/pkg/oci/remote"
 	"github.com/ulikunitz/xz"
 )
 
@@ -70,17 +74,31 @@ type PackageMapping struct {
 
 func main() {
 	var concurrency = flag.Int("concurrency", 4, "Number of concurrent downloads")
+	var platform = flag.String("platform", "linux/amd64", "Platform for container image")
 	flag.Parse()
 
-	if flag.NArg() != 2 {
-		fmt.Fprintf(os.Stderr, "Usage: %s [options] <sbom-file.json> <download-directory>\n", os.Args[0])
+	if flag.NArg() < 1 || flag.NArg() > 2 {
+		fmt.Fprintf(os.Stderr, "Usage: %s [options] <sbom-file.json|container-image> [download-directory]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  %s sbom.json ./downloads\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s cgr.dev/chainguard/unbound:latest ./downloads\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s cgr.dev/chainguard/unbound:latest\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	sbomFile := flag.Arg(0)
-	downloadDir := flag.Arg(1)
+	sbomInput := flag.Arg(0)
+	var downloadDir string
+
+	if flag.NArg() == 2 {
+		downloadDir = flag.Arg(1)
+	} else if isContainerImage(sbomInput) {
+		downloadDir = generateDefaultDownloadDir(sbomInput)
+	} else {
+		fmt.Fprintf(os.Stderr, "Error: download directory is required for SBOM files\n")
+		os.Exit(1)
+	}
 
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating download directory: %v\n", err)
@@ -94,7 +112,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	packageMappings, err := extractPackageMappings(sbomFile)
+	var sbomData []byte
+	var err error
+
+	if isContainerImage(sbomInput) {
+		fmt.Printf("🔍 Retrieving SBOM from container image: %s\n", sbomInput)
+		sbomData, err = retrieveSBOMFromSigstore(sbomInput, *platform)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error retrieving SBOM from sigstore: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Printf("🔍 Reading SBOM from file: %s\n", sbomInput)
+		sbomData, err = os.ReadFile(sbomInput)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading SBOM file: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	packageMappings, err := extractPackageMappingsFromData(sbomData)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error extracting package mappings: %v\n", err)
 		os.Exit(1)
@@ -126,12 +163,7 @@ func main() {
 		extractionSummary.SuccessCount+extractionSummary.FailureCount)
 }
 
-func extractPackageMappings(sbomFile string) ([]PackageMapping, error) {
-	data, err := os.ReadFile(sbomFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read SBOM file: %w", err)
-	}
-
+func extractPackageMappingsFromData(data []byte) ([]PackageMapping, error) {
 	var sbom SPDXSBOM
 	if err := json.Unmarshal(data, &sbom); err != nil {
 		return nil, fmt.Errorf("failed to parse SBOM JSON: %w", err)
@@ -419,4 +451,132 @@ func extractArchive(archiveFile, extractDir string) error {
 	}
 
 	return nil
+}
+
+func isContainerImage(input string) bool {
+	return strings.Contains(input, "/") && !strings.HasSuffix(input, ".json")
+}
+
+func generateDefaultDownloadDir(imageRef string) string {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return "sbom-download"
+	}
+
+	repo := ref.Context().RepositoryStr()
+	parts := strings.Split(repo, "/")
+	imageName := parts[len(parts)-1]
+
+	if digest, ok := ref.(name.Digest); ok {
+		digestStr := strings.TrimPrefix(digest.DigestStr(), "sha256:")
+		if len(digestStr) > 12 {
+			digestStr = digestStr[:12]
+		}
+		return fmt.Sprintf("%s-%s", imageName, digestStr)
+	}
+
+	if tag, ok := ref.(name.Tag); ok {
+		tagStr := tag.TagStr()
+		if tagStr != "latest" {
+			return fmt.Sprintf("%s-%s", imageName, tagStr)
+		}
+	}
+
+	return imageName
+}
+
+func retrieveSBOMFromSigstore(imageRef, platform string) ([]byte, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("invalid image reference: %w", err)
+	}
+
+	signedImg, err := remote.SignedImage(ref)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get signed image: %w", err)
+	}
+
+	attestations, err := signedImg.Attestations()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get attestations: %w", err)
+	}
+
+	attestationList, err := attestations.Get()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get attestation list: %w", err)
+	}
+
+	if len(attestationList) == 0 {
+		return nil, fmt.Errorf("no attestations found for image %s", imageRef)
+	}
+
+	for _, attestation := range attestationList {
+		sbomData, err := extractSPDXFromAttestation(attestation)
+		if err != nil {
+			continue
+		}
+		if sbomData != nil {
+			return sbomData, nil
+		}
+	}
+
+	return nil, fmt.Errorf("no SPDX attestations found for image %s", imageRef)
+}
+
+func extractSPDXFromAttestation(attestation oci.Signature) ([]byte, error) {
+	payload, err := attestation.Payload()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payload: %w", err)
+	}
+
+	var dsse map[string]interface{}
+	if err := json.Unmarshal(payload, &dsse); err != nil {
+		return nil, fmt.Errorf("failed to parse DSSE envelope: %w", err)
+	}
+
+	payloadField, exists := dsse["payload"]
+	if !exists {
+		return nil, fmt.Errorf("no payload field in DSSE envelope")
+	}
+
+	payloadStr, ok := payloadField.(string)
+	if !ok {
+		return nil, fmt.Errorf("payload field is not a string")
+	}
+
+	decodedPayload, err := base64.StdEncoding.DecodeString(payloadStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode base64 payload: %w", err)
+	}
+
+	var statement map[string]interface{}
+	if err := json.Unmarshal(decodedPayload, &statement); err != nil {
+		return nil, fmt.Errorf("failed to parse statement: %w", err)
+	}
+
+	predicateType, exists := statement["predicateType"]
+	if !exists {
+		return nil, fmt.Errorf("no predicateType found")
+	}
+
+	predicateTypeStr, ok := predicateType.(string)
+	if !ok {
+		return nil, fmt.Errorf("predicateType is not a string")
+	}
+
+	if !strings.Contains(predicateTypeStr, "spdx.dev/Document") {
+		return nil, fmt.Errorf("not an SPDX attestation")
+	}
+
+	predicate, exists := statement["predicate"]
+	if !exists {
+		return nil, fmt.Errorf("no predicate found in statement")
+	}
+
+	predicateBytes, err := json.Marshal(predicate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal predicate: %w", err)
+	}
+
+	return predicateBytes, nil
 }
