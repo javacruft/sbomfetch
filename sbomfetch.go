@@ -52,6 +52,7 @@ type DownloadSummary struct {
 	SuccessCount int
 	FailureCount int
 	Files        []string
+	FilePackages map[string]string
 }
 
 type ExtractionSummary struct {
@@ -96,7 +97,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Found %d populated downloadLocation URLs\n", len(packageMappings))
+	fmt.Printf("🔍 Found %d populated downloadLocation URLs\n", len(packageMappings))
 
 	if len(packageMappings) == 0 {
 		fmt.Println("No tarball URLs found to download")
@@ -105,19 +106,19 @@ func main() {
 
 	downloadSummary := downloadConcurrently(packageMappings, archivesDir, *concurrency)
 
-	fmt.Printf("Download complete. Files saved to: %s\n", downloadDir)
-	fmt.Printf("Extracting %d archives...\n", len(downloadSummary.Files))
+	fmt.Printf("🎁 Download complete. Files saved to: %s\n", downloadDir)
+	fmt.Printf("🗄️ Extracting %d archives...\n", len(downloadSummary.Files))
 
-	extractionSummary := extractArchives(downloadSummary.Files, downloadDir)
+	extractionSummary := extractArchives(downloadSummary.Files, downloadSummary.FilePackages, downloadDir)
 
-	fmt.Printf("Extraction complete. Archives extracted to: %s\n", downloadDir)
+	fmt.Printf("🎆 Extraction complete. Archives extracted to: %s\n", downloadDir)
 
 	// Print execution summary
-	fmt.Println("\n=== EXECUTION SUMMARY ===")
-	fmt.Printf("Downloads: %d successful, %d failed (total: %d)\n",
+	fmt.Println("\n📊 === EXECUTION SUMMARY ===")
+	fmt.Printf("🚀 Downloads: %d successful, %d failed (total: %d)\n",
 		downloadSummary.SuccessCount, downloadSummary.FailureCount,
 		downloadSummary.SuccessCount+downloadSummary.FailureCount)
-	fmt.Printf("Extractions: %d successful, %d failed (total: %d)\n",
+	fmt.Printf("🎉 Extractions: %d successful, %d failed (total: %d)\n",
 		extractionSummary.SuccessCount, extractionSummary.FailureCount,
 		extractionSummary.SuccessCount+extractionSummary.FailureCount)
 }
@@ -206,6 +207,7 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 	// Collect results
 	completed := 0
 	var downloadedFiles []string
+	filePackages := make(map[string]string)
 	successCount := 0
 	failureCount := 0
 
@@ -213,12 +215,14 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 		completed++
 		if result.Error != nil {
 			failureCount++
-			fmt.Fprintf(os.Stderr, "Error downloading %s: %v\n", result.URL, result.Error)
+			fmt.Fprintf(os.Stderr, "❌ Error downloading %s: %v\n", result.URL, result.Error)
 		} else {
 			successCount++
 			filename := getFilenameFromURL(result.URL)
-			downloadedFiles = append(downloadedFiles, filepath.Join(archivesDir, filename))
-			fmt.Printf("✓ Downloaded (%d/%d): %s [%s]\n", completed, len(mappings), filename, result.APKPackage)
+			filePath := filepath.Join(archivesDir, filename)
+			downloadedFiles = append(downloadedFiles, filePath)
+			filePackages[filePath] = result.APKPackage
+			fmt.Printf("📦 Downloaded (%d/%d): %s [%s]\n", completed, len(mappings), filename, result.APKPackage)
 		}
 	}
 
@@ -226,13 +230,14 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 		SuccessCount: successCount,
 		FailureCount: failureCount,
 		Files:        downloadedFiles,
+		FilePackages: filePackages,
 	}
 }
 
 func worker(jobs <-chan DownloadJob, results chan<- DownloadResult, archivesDir string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for job := range jobs {
-		fmt.Printf("→ Starting download (%d/%d): %s [%s]\n", job.Index, job.Total, getFilenameFromURL(job.URL), job.APKPackage)
+		fmt.Printf("🚀 Starting download (%d/%d): %s [%s]\n", job.Index, job.Total, getFilenameFromURL(job.URL), job.APKPackage)
 
 		err := downloadFileToDir(job.URL, archivesDir)
 		results <- DownloadResult{
@@ -299,18 +304,22 @@ func getFilenameFromURL(url string) string {
 	return filename
 }
 
-func extractArchives(archiveFiles []string, extractDir string) ExtractionSummary {
+func extractArchives(archiveFiles []string, filePackages map[string]string, extractDir string) ExtractionSummary {
 	successCount := 0
 	failureCount := 0
 
 	for i, archiveFile := range archiveFiles {
-		fmt.Printf("Extracting (%d/%d): %s\n", i+1, len(archiveFiles), filepath.Base(archiveFile))
+		packageName := filePackages[archiveFile]
+		if packageName == "" {
+			packageName = "unknown"
+		}
+		fmt.Printf("📤 Extracting (%d/%d): %s [%s]\n", i+1, len(archiveFiles), filepath.Base(archiveFile), packageName)
 		if err := extractArchive(archiveFile, extractDir); err != nil {
 			failureCount++
-			fmt.Fprintf(os.Stderr, "Error extracting %s: %v\n", archiveFile, err)
+			fmt.Fprintf(os.Stderr, "😱 Error extracting %s: %v\n", archiveFile, err)
 		} else {
 			successCount++
-			fmt.Printf("✓ Extracted: %s\n", filepath.Base(archiveFile))
+			fmt.Printf("🎉 Extracted: %s [%s]\n", filepath.Base(archiveFile), packageName)
 		}
 	}
 
@@ -400,7 +409,7 @@ func extractArchive(archiveFile, extractDir string) error {
 			}
 
 			if err := os.Symlink(header.Linkname, targetPath); err != nil {
-				fmt.Fprintf(os.Stderr, "failed to create symlink %s: %w\n", targetPath, err)
+				fmt.Fprintf(os.Stderr, "failed to create symlink %s -> %s\n", header.Linkname, targetPath)
 				continue
 			}
 		}
