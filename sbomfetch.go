@@ -122,6 +122,14 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error retrieving SBOM from sigstore: %v\n", err)
 			os.Exit(1)
 		}
+
+		// Write SBOM to top level of download directory
+		sbomPath := filepath.Join(downloadDir, "sbom.json")
+		if err := os.WriteFile(sbomPath, sbomData, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing SBOM to %s: %v\n", sbomPath, err)
+			os.Exit(1)
+		}
+		fmt.Printf("💾 SBOM saved to: %s\n", sbomPath)
 	} else {
 		fmt.Printf("🔍 Reading SBOM from file: %s\n", sbomInput)
 		sbomData, err = os.ReadFile(sbomInput)
