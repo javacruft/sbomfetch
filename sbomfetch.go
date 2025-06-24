@@ -100,6 +100,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Remove existing directory if it exists
+	if _, err := os.Stat(downloadDir); err == nil {
+		fmt.Printf("🗑️  Removing existing directory: %s\n", downloadDir)
+		if err := os.RemoveAll(downloadDir); err != nil {
+			fmt.Fprintf(os.Stderr, "Error removing existing directory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating download directory: %v\n", err)
 		os.Exit(1)
