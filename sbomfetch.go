@@ -43,23 +43,23 @@ type Relationship struct {
 }
 
 type DownloadJob struct {
-	URL        string
-	Index      int
-	Total      int
-	APKPackage string
+	URL         string
+	Index       int
+	Total       int
+	APKPackages []string
 }
 
 type DownloadResult struct {
-	URL        string
-	APKPackage string
-	Error      error
+	URL         string
+	APKPackages []string
+	Error       error
 }
 
 type DownloadSummary struct {
 	SuccessCount int
 	FailureCount int
 	Files        []string
-	FilePackages map[string]string
+	FilePackages map[string][]string
 }
 
 type ExtractionSummary struct {
@@ -68,8 +68,8 @@ type ExtractionSummary struct {
 }
 
 type PackageMapping struct {
-	URL        string
-	APKPackage string
+	URL         string
+	APKPackages []string
 }
 
 func main() {
@@ -183,35 +183,52 @@ func extractPackageMappingsFromData(data []byte) ([]PackageMapping, error) {
 		packageMap[sbom.Packages[i].SPDXID] = &sbom.Packages[i]
 	}
 
-	// Create reverse mapping: source package SPDXID -> APK package
-	sourceToAPK := make(map[string]string)
+	// Create mapping: source package SPDXID -> list of APK packages
+	sourceToAPKs := make(map[string][]string)
 	for _, rel := range sbom.Relationships {
 		if rel.RelationshipType == "GENERATED_FROM" {
 			// rel.SpdxElementId is the APK package
 			// rel.RelatedSpdxElement is the source package with downloadLocation
 			if apkPkg, exists := packageMap[rel.SpdxElementId]; exists {
-				sourceToAPK[rel.RelatedSpdxElement] = apkPkg.Name
+				sourceToAPKs[rel.RelatedSpdxElement] = append(sourceToAPKs[rel.RelatedSpdxElement], apkPkg.Name)
 			}
 		}
 	}
 
-	var mappings []PackageMapping
+	// Group by URL to collect all packages per download location
+	urlToPackages := make(map[string][]string)
 	for _, pkg := range sbom.Packages {
 		if pkg.DownloadLocation != "" &&
 			pkg.DownloadLocation != "NOASSERTION" &&
 			strings.HasPrefix(pkg.DownloadLocation, "http") {
 
 			if isTarball(pkg.DownloadLocation) {
-				apkPackage := sourceToAPK[pkg.SPDXID]
-				if apkPackage == "" {
-					apkPackage = "unknown"
+				apkPackages := sourceToAPKs[pkg.SPDXID]
+				if len(apkPackages) == 0 {
+					apkPackages = []string{"unknown"}
 				}
-				mappings = append(mappings, PackageMapping{
-					URL:        pkg.DownloadLocation,
-					APKPackage: apkPackage,
-				})
+				// Append all packages for this source to the URL mapping
+				urlToPackages[pkg.DownloadLocation] = append(urlToPackages[pkg.DownloadLocation], apkPackages...)
 			}
 		}
+	}
+
+	// Convert to final mappings format
+	var mappings []PackageMapping
+	for url, packages := range urlToPackages {
+		// Remove duplicates
+		uniquePackages := make(map[string]bool)
+		var finalPackages []string
+		for _, pkg := range packages {
+			if !uniquePackages[pkg] {
+				uniquePackages[pkg] = true
+				finalPackages = append(finalPackages, pkg)
+			}
+		}
+		mappings = append(mappings, PackageMapping{
+			URL:         url,
+			APKPackages: finalPackages,
+		})
 	}
 
 	return mappings, nil
@@ -233,10 +250,10 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 		defer close(jobs)
 		for i, mapping := range mappings {
 			jobs <- DownloadJob{
-				URL:        mapping.URL,
-				APKPackage: mapping.APKPackage,
-				Index:      i + 1,
-				Total:      len(mappings),
+				URL:         mapping.URL,
+				APKPackages: mapping.APKPackages,
+				Index:       i + 1,
+				Total:       len(mappings),
 			}
 		}
 	}()
@@ -250,7 +267,7 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 	// Collect results
 	completed := 0
 	var downloadedFiles []string
-	filePackages := make(map[string]string)
+	filePackages := make(map[string][]string)
 	successCount := 0
 	failureCount := 0
 
@@ -264,8 +281,8 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 			filename := getFilenameFromURL(result.URL)
 			filePath := filepath.Join(archivesDir, filename)
 			downloadedFiles = append(downloadedFiles, filePath)
-			filePackages[filePath] = result.APKPackage
-			fmt.Printf("📦 Downloaded (%d/%d): %s [%s]\n", completed, len(mappings), filename, result.APKPackage)
+			filePackages[filePath] = result.APKPackages
+			fmt.Printf("📦 Downloaded (%d/%d): %s [%s]\n", completed, len(mappings), filename, strings.Join(result.APKPackages, ", "))
 		}
 	}
 
@@ -280,13 +297,13 @@ func downloadConcurrently(mappings []PackageMapping, archivesDir string, concurr
 func worker(jobs <-chan DownloadJob, results chan<- DownloadResult, archivesDir string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for job := range jobs {
-		fmt.Printf("🚀 Starting download (%d/%d): %s [%s]\n", job.Index, job.Total, getFilenameFromURL(job.URL), job.APKPackage)
+		fmt.Printf("🚀 Starting download (%d/%d): %s [%s]\n", job.Index, job.Total, getFilenameFromURL(job.URL), strings.Join(job.APKPackages, ", "))
 
 		err := downloadFileToDir(job.URL, archivesDir)
 		results <- DownloadResult{
-			URL:        job.URL,
-			APKPackage: job.APKPackage,
-			Error:      err,
+			URL:         job.URL,
+			APKPackages: job.APKPackages,
+			Error:       err,
 		}
 	}
 }
@@ -347,22 +364,23 @@ func getFilenameFromURL(url string) string {
 	return filename
 }
 
-func extractArchives(archiveFiles []string, filePackages map[string]string, extractDir string) ExtractionSummary {
+func extractArchives(archiveFiles []string, filePackages map[string][]string, extractDir string) ExtractionSummary {
 	successCount := 0
 	failureCount := 0
 
 	for i, archiveFile := range archiveFiles {
-		packageName := filePackages[archiveFile]
-		if packageName == "" {
-			packageName = "unknown"
+		packageNames := filePackages[archiveFile]
+		if len(packageNames) == 0 {
+			packageNames = []string{"unknown"}
 		}
-		fmt.Printf("📤 Extracting (%d/%d): %s [%s]\n", i+1, len(archiveFiles), filepath.Base(archiveFile), packageName)
+		packageList := strings.Join(packageNames, ", ")
+		fmt.Printf("📤 Extracting (%d/%d): %s [%s]\n", i+1, len(archiveFiles), filepath.Base(archiveFile), packageList)
 		if err := extractArchive(archiveFile, extractDir); err != nil {
 			failureCount++
 			fmt.Fprintf(os.Stderr, "😱 Error extracting %s: %v\n", archiveFile, err)
 		} else {
 			successCount++
-			fmt.Printf("🎉 Extracted: %s [%s]\n", filepath.Base(archiveFile), packageName)
+			fmt.Printf("🎉 Extracted: %s [%s]\n", filepath.Base(archiveFile), packageList)
 		}
 	}
 
