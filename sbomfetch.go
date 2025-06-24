@@ -185,14 +185,34 @@ func extractPackageMappingsFromData(data []byte) ([]PackageMapping, error) {
 
 	// Create mapping: source package SPDXID -> list of APK packages
 	sourceToAPKs := make(map[string][]string)
+	var validationErrors []string
+
 	for _, rel := range sbom.Relationships {
 		if rel.RelationshipType == "GENERATED_FROM" {
 			// rel.SpdxElementId is the APK package
 			// rel.RelatedSpdxElement is the source package with downloadLocation
 			if apkPkg, exists := packageMap[rel.SpdxElementId]; exists {
 				sourceToAPKs[rel.RelatedSpdxElement] = append(sourceToAPKs[rel.RelatedSpdxElement], apkPkg.Name)
+
+				// Validate that the source package has a downloadLocation
+				if sourcePkg, sourceExists := packageMap[rel.RelatedSpdxElement]; sourceExists {
+					if sourcePkg.DownloadLocation == "" || sourcePkg.DownloadLocation == "NOASSERTION" {
+						validationErrors = append(validationErrors, fmt.Sprintf("Package '%s' has GENERATED_FROM relation to '%s' but source package lacks downloadLocation", apkPkg.Name, sourcePkg.Name))
+					}
+				} else {
+					validationErrors = append(validationErrors, fmt.Sprintf("Package '%s' has GENERATED_FROM relation to non-existent source package '%s'", apkPkg.Name, rel.RelatedSpdxElement))
+				}
 			}
 		}
+	}
+
+	// Report validation errors if any
+	if len(validationErrors) > 0 {
+		fmt.Fprintf(os.Stderr, "⚠️  Validation warnings for GENERATED_FROM relations:\n")
+		for _, err := range validationErrors {
+			fmt.Fprintf(os.Stderr, "   - %s\n", err)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
 	}
 
 	// Group by URL to collect all packages per download location
